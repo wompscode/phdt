@@ -85,7 +85,7 @@ static class Program
                 Log($"Dummy file size set to {dummy}.", "warning", ConsoleColor.Yellow, ConsoleColor.DarkYellow);
             }
 
-            if (dummy >= 32)
+            if (dummy > 32)
             {
                 Log($"Dummy file size above 32mb, forcing to 32mb.", "warning", ConsoleColor.Yellow, ConsoleColor.DarkYellow);
                 dummy = 32;
@@ -229,14 +229,14 @@ static class Program
         CreateStopwatch.Stop();
         if(_createCount == sizeToTest)
         {
-            if(_verbose) Log($"{_createCount} == {sizeToTest}, continuing to validation. (took {ElapsedTime(CreateStopwatch.Elapsed)})", "verbose", ConsoleColor.Cyan, ConsoleColor.DarkCyan);
+            if(_verbose) Log($"{_createCount} == {sizeToTest}, continuing to validation. (took {ElapsedTime(CreateStopwatch.Elapsed)}, (~)write: {Math.Round(sizeToTest / CreateStopwatch.Elapsed.TotalSeconds)}MB/s)", "verbose", ConsoleColor.Cyan, ConsoleColor.DarkCyan);
             else
             {
                 if (temp == false && !NewLines)
                 {
                     Console.WriteLine("");
                 }
-                Log($"{_createCount} matches {sizeToTest}, continuing to validation. (took {ElapsedTime(CreateStopwatch.Elapsed)})", "status", ConsoleColor.Magenta, ConsoleColor.DarkMagenta, true);
+                Log($"{_createCount} matches {sizeToTest}, continuing to validation. (took {ElapsedTime(CreateStopwatch.Elapsed)}, (~)write: {Math.Round(sizeToTest / CreateStopwatch.Elapsed.TotalSeconds)}MB/s)", "status", ConsoleColor.Magenta, ConsoleColor.DarkMagenta, true);
             }
             Validate(location, dummy, dummySize, times, sizeToTest);
         }
@@ -310,7 +310,7 @@ static class Program
         foreach (Task<CompareResult> item in ValidateTasks)
         {
             CompareResult compareResult = await item;
-            if(_verbose) Log($"Comparing file{compareResult.Iteration}.phdt to {dummy}.", "verbose", ConsoleColor.Cyan, ConsoleColor.DarkCyan);
+            if(_verbose) Log($"Comparing file{compareResult.Iteration}.phdt to dummy.", "verbose", ConsoleColor.Cyan, ConsoleColor.DarkCyan);
 
             bool outcome = compareResult.HasFailedCompare;
             
@@ -321,7 +321,7 @@ static class Program
             }
             _validateCount += dummySize;
             
-            if(_verbose) Log($"{compareResult.FileName} and {dummy} match, continuing.", "verbose", ConsoleColor.Cyan, ConsoleColor.DarkCyan);
+            if(_verbose) Log($"{compareResult.FileName} and dummy match, continuing.", "verbose", ConsoleColor.Cyan, ConsoleColor.DarkCyan);
             else
             {
                 if (temp == false && !NewLines)
@@ -329,14 +329,14 @@ static class Program
                     Console.WriteLine("");
                     temp = true;
                 }
-                Log($"{compareResult.FileName} and {dummy} match, continuing.", "status", ConsoleColor.Magenta, ConsoleColor.DarkMagenta, true);
+                Log($"{compareResult.FileName} and dummy match, continuing.", "status", ConsoleColor.Magenta, ConsoleColor.DarkMagenta, true);
             }
         }
 
         CompareStopwatch.Stop();
         if (_validateCount == sizeToTest)
         {
-            Log($"{_validateCount} megabytes counted, {sizeToTest} megabytes needed. (took {ElapsedTime(CompareStopwatch.Elapsed)})", "status", ConsoleColor.Magenta, ConsoleColor.DarkMagenta);
+            Log($"{_validateCount} megabytes counted, {sizeToTest} megabytes needed. (took {ElapsedTime(CompareStopwatch.Elapsed)}, (~)read: {Math.Round(sizeToTest / CompareStopwatch.Elapsed.TotalSeconds)}MB/s)", "status", ConsoleColor.Magenta, ConsoleColor.DarkMagenta);
         }
         else
         {
