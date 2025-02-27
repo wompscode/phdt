@@ -13,8 +13,10 @@ using System.Reflection;
 namespace phdt;
 static class Program
 {
-    private static readonly Stopwatch Stopwatch = Stopwatch.StartNew();
-    
+    private static readonly Stopwatch TotalStopwatch = new ();
+    private static readonly Stopwatch CreateStopwatch = new ();
+    private static readonly Stopwatch CompareStopwatch = new ();
+     
     private static readonly bool Debug = false;
     private static readonly string? Version = Assembly.GetExecutingAssembly().GetName().Version?.ToString();
     
@@ -32,7 +34,7 @@ static class Program
         {
             new Option<string>(["--location", "-l"], "Directory to handle all testing in."),
             new Option<int>(["--size", "-s"], "Total size to test in MB."),
-            new Option<int>(["--dummy", "-d"], "Size of dummy file in MB."),
+            new Option<int>(["--dummy", "-d"], "Size of dummy file in MB (max 32mb)."),
             new Option<bool>(["--revalidate", "-rv"], "Re-validate files in directory specified in location (first file becomes dummy)."),
             new Option<bool>(["--verbose", "-v"], "Verbose mode."),
             new Option<bool>(["--monochrome", "-m"], "Disables colour output."),
@@ -43,7 +45,7 @@ static class Program
         
         rootCommand.Handler = CommandHandler.Create<string, int, int, bool, bool, bool, bool>((location, size, dummy, verbose, revalidate, monochrome, newlines) =>
         {
-            Stopwatch.Start();
+            TotalStopwatch.Start();
             MonochromeOutput = monochrome;
             NewLines = newlines;
             _verbose = verbose;
@@ -72,7 +74,7 @@ static class Program
             if (dummy == 0)
             {
                 Log($"Dummy file size was not specified, finding value that fits into size specified.", "warning", ConsoleColor.Yellow, ConsoleColor.DarkYellow);
-                for (int i = 2; i < 128; i++)
+                for (int i = 2; i < 32; i++)
                 {
                     if ((size % i) == 0)
                     {
@@ -81,6 +83,12 @@ static class Program
                     }
                 }
                 Log($"Dummy file size set to {dummy}.", "warning", ConsoleColor.Yellow, ConsoleColor.DarkYellow);
+            }
+
+            if (dummy >= 32)
+            {
+                Log($"Dummy file size above 32mb, forcing to 32mb.", "warning", ConsoleColor.Yellow, ConsoleColor.DarkYellow);
+                dummy = 32;
             }
             
             string path = location;
@@ -165,7 +173,7 @@ static class Program
         
         int count = 0;
         int times = sizeToTest / dummySize;
-        
+        CreateStopwatch.Start();
         for (int i = 0; i < times; i++)
         {
             count += dummySize;
@@ -216,18 +224,19 @@ static class Program
 
             _createCount += dummySize;
         }
-        
+
         temp = false;
+        CreateStopwatch.Stop();
         if(_createCount == sizeToTest)
         {
-            if(_verbose) Log($"{_createCount} == {sizeToTest}, continuing to validation. (took {ElapsedTime(Stopwatch.Elapsed)})", "verbose", ConsoleColor.Cyan, ConsoleColor.DarkCyan);
+            if(_verbose) Log($"{_createCount} == {sizeToTest}, continuing to validation. (took {ElapsedTime(CreateStopwatch.Elapsed)})", "verbose", ConsoleColor.Cyan, ConsoleColor.DarkCyan);
             else
             {
                 if (temp == false && !NewLines)
                 {
                     Console.WriteLine("");
                 }
-                Log($"{_createCount} matches {sizeToTest}, continuing to validation. (took {ElapsedTime(Stopwatch.Elapsed)})", "status", ConsoleColor.Magenta, ConsoleColor.DarkMagenta, true);
+                Log($"{_createCount} matches {sizeToTest}, continuing to validation. (took {ElapsedTime(CreateStopwatch.Elapsed)})", "status", ConsoleColor.Magenta, ConsoleColor.DarkMagenta, true);
             }
             Validate(location, dummy, dummySize, times, sizeToTest);
         }
@@ -257,7 +266,8 @@ static class Program
         int count = 0;
         
         if(_verbose) Log($"Validation reached.", "verbose", ConsoleColor.Cyan, ConsoleColor.DarkCyan);
-        
+
+        CompareStopwatch.Start();
         for (int i = 0; i < times; i++)
         {
             count += dummySize;
@@ -322,18 +332,20 @@ static class Program
                 Log($"{compareResult.FileName} and {dummy} match, continuing.", "status", ConsoleColor.Magenta, ConsoleColor.DarkMagenta, true);
             }
         }
+
+        CompareStopwatch.Stop();
         if (_validateCount == sizeToTest)
         {
-            Log($"{_validateCount} megabytes counted, {sizeToTest} megabytes needed. (took {ElapsedTime(Stopwatch.Elapsed)})", "status", ConsoleColor.Magenta, ConsoleColor.DarkMagenta);
+            Log($"{_validateCount} megabytes counted, {sizeToTest} megabytes needed. (took {ElapsedTime(CompareStopwatch.Elapsed)})", "status", ConsoleColor.Magenta, ConsoleColor.DarkMagenta);
         }
         else
         {
             Log($"{_validateCount} megabytes counted, {sizeToTest} megabytes needed: mismatch?", "fatal", ConsoleColor.Red, ConsoleColor.DarkRed);
         }
 
-        Stopwatch.Stop();
+        TotalStopwatch.Stop();
         
-        Log($"Completed in {ElapsedTime(Stopwatch.Elapsed)}.", "finish", ConsoleColor.Green, ConsoleColor.DarkGreen);
+        Log($"Completed in {ElapsedTime(CompareStopwatch.Elapsed + CreateStopwatch.Elapsed)} (full total: {ElapsedTime(TotalStopwatch.Elapsed)}).", "finish", ConsoleColor.Green, ConsoleColor.DarkGreen);
         Log($"You can clear the files in \"{location}\" if you want to, or keep them to re-validate (phdt -l {location} -s {sizeToTest} -d {dummySize} -rv).", "finish", ConsoleColor.Green, ConsoleColor.DarkGreen);
     }
 
