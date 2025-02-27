@@ -24,18 +24,21 @@ public static class FileOperations
         public string FileName { get; set; }
         public long Length { get; set; }
         public byte[] Data { get; set; }
+        public bool IsSet { get; set; }
     }
 
     public static DummyFile Dummy;
 
     public static void SetDummyFile(string file, string location)
     {
+        if (Dummy.IsSet) return;
         Dummy.FileName = file;
         var f1Stream = new FileStream(Path.Combine(location,file), FileMode.Open);
         Dummy.Length = f1Stream.Length;
         Dummy.Data = new byte[f1Stream.Length];
         var _ = f1Stream.Read(Dummy.Data, 0, Dummy.Data.Length);
         f1Stream.Close();
+        Dummy.IsSet = true;
     }
     public static Task<bool> DummyCompare(DummyFile dummy, string fileOne)
     {
