@@ -21,9 +21,9 @@ public static class FileOperations
 
     // https://learn.microsoft.com/en-us/troubleshoot/developer/visualstudio/csharp/language-compilers/create-file-compare
     // rewritten to just move stuff around a bit
-    public static bool Compare(string fileOne, string fileTwo)
+    public static Task<bool> Compare(string fileOne, string fileTwo)
     {
-        if (fileOne == fileTwo) return true;
+        if (fileOne == fileTwo) return Task.FromResult(true);
 
         int f1Byte;
         int f2Byte;
@@ -34,7 +34,7 @@ public static class FileOperations
         {
             f1Stream.Close();
             f2Stream.Close();
-            return false;
+            return Task.FromResult(false);
         }
 
         do
@@ -46,6 +46,6 @@ public static class FileOperations
         f1Stream.Close();
         f2Stream.Close();
         
-        return ((f1Byte - f2Byte) == 0);
+        return Task.FromResult((f1Byte - f2Byte) == 0);
     }
 }

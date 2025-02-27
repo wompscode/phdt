@@ -1,4 +1,5 @@
 ﻿using static phdt.Logging;
+using static phdt.FileOperations;
 using System.CommandLine;
 using System.CommandLine.NamingConventionBinder;
 using System.Diagnostics;
@@ -123,7 +124,7 @@ static class Program
             if (string.IsNullOrEmpty(dummy))
             {
                 if(_verbose) Log($"No dummy file, creating: file{i}.phdt.", "verbose", ConsoleColor.Cyan, ConsoleColor.DarkCyan);
-                FileOperations.GenerateDummyFile(Path.Combine(location, $"file{i}.phdt"), dummySize);
+                GenerateDummyFile(Path.Combine(location, $"file{i}.phdt"), dummySize);
                 dummy = $"file{i}.phdt";
                 continue;
             }
@@ -160,8 +161,13 @@ static class Program
             Log($"{count} and {sizeToTest} do not match, something went wrong..", "fatal", ConsoleColor.Red, ConsoleColor.DarkRed);
         }
     }
-
-    private static void Validate(string location, string dummy, int dummySize, int times, int sizeToTest)
+    static List<Thread> _threads = new List<Thread>();
+    public static Task<bool> Test()
+    {
+        
+        return Task.FromResult(true);
+    }
+    private static async void Validate(string location, string dummy, int dummySize, int times, int sizeToTest)
     {
         if(_verbose) Log($"Validation reached.", "verbose", ConsoleColor.Cyan, ConsoleColor.DarkCyan);
 
@@ -176,7 +182,7 @@ static class Program
                 if(_verbose) Log($"File is dummy, continuing.", "verbose", ConsoleColor.Cyan, ConsoleColor.DarkCyan);
                 continue;
             }
-            bool outcome = FileOperations.Compare(Path.Combine(location, dummy), Path.Combine(location, $"file{i}.phdt"));
+            bool outcome = await Compare(Path.Combine(location, dummy), Path.Combine(location, $"file{i}.phdt"));
             if(_verbose) Log($"Comparing file{i}.phdt to {dummy}.", "verbose", ConsoleColor.Cyan, ConsoleColor.DarkCyan);
             if (outcome == false)
             {
