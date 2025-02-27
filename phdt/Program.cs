@@ -20,7 +20,7 @@ static class Program
     
     private static bool _verbose;
     public static bool MonochromeOutput;
-    public static bool RawOutput;
+    public static bool NewLines;
     
     static readonly List<Task<CompareResult>> ValidateTasks = new ();
     private static int _validateCount;
@@ -36,16 +36,16 @@ static class Program
             new Option<bool>(["--revalidate", "-rv"], "Re-validate files in directory specified in location (first file becomes dummy)."),
             new Option<bool>(["--verbose", "-v"], "Verbose mode."),
             new Option<bool>(["--monochrome", "-m"], "Disables colour output."),
-            new Option<bool>(["--raw", "-r"], "Raw output.")
+            new Option<bool>(["--newlines", "-n"], "Always output on newline, never overwrite output.")
         };
         
         rootCommand.Description = "Test drive capacity by copying files to a directory on the drive, and validate these files to a dummy file.";
         
-        rootCommand.Handler = CommandHandler.Create<string, int, int, bool, bool, bool, bool>((location, size, dummy, verbose, revalidate, monochrome, raw) =>
+        rootCommand.Handler = CommandHandler.Create<string, int, int, bool, bool, bool, bool>((location, size, dummy, verbose, revalidate, monochrome, newlines) =>
         {
             Stopwatch.Start();
-            MonochromeOutput = raw || monochrome;
-            RawOutput = raw;
+            MonochromeOutput = monochrome;
+            NewLines = newlines;
             _verbose = verbose;
             
             Log($"PHoebe's Disk Tester {Version}", "init", ConsoleColor.Blue, ConsoleColor.DarkBlue);
@@ -182,26 +182,36 @@ static class Program
 
             string __ = $"file{i}.phdt";
             CreateTasks.Add(Task.Run(() => CreateTask(location, __)));
-
+            if(_verbose) Log($"Queued {__} to be created.", "verbose", ConsoleColor.Cyan, ConsoleColor.DarkCyan);
+            else
+            {
+                if (temp == false && !NewLines)
+                {
+                    Console.WriteLine("");
+                    temp = true;
+                }
+                Log($"Queued {__} to be created.", "status", ConsoleColor.Magenta, ConsoleColor.DarkMagenta, true);
+            }
         }
-
+    
         // wait for all CreateTasks to be done
         Task.WaitAll(CreateTasks.ToArray<Task>());
-
+        temp = false;
+        
         foreach (var item in CreateTasks)
         {
             CreateResult result = await item;
 
             if (result.Success == false) break;
-            if(_verbose) Log($"Creating {result.File}.", "verbose", ConsoleColor.Cyan, ConsoleColor.DarkCyan);
+            if(_verbose) Log($"Created {result.File}.", "verbose", ConsoleColor.Cyan, ConsoleColor.DarkCyan);
             else
             {
-                if (temp == false && !RawOutput)
+                if (temp == false && !NewLines)
                 {
                     Console.WriteLine("");
                     temp = true;
                 }
-                Log($"Creating {result.File}.", "status", ConsoleColor.Magenta, ConsoleColor.DarkMagenta, true);
+                Log($"Created {result.File}.", "status", ConsoleColor.Magenta, ConsoleColor.DarkMagenta, true);
             }
 
             _createCount += dummySize;
@@ -213,7 +223,7 @@ static class Program
             if(_verbose) Log($"{_createCount} == {sizeToTest}, continuing to validation. (took {ElapsedTime(Stopwatch.Elapsed)})", "verbose", ConsoleColor.Cyan, ConsoleColor.DarkCyan);
             else
             {
-                if (temp == false && !RawOutput)
+                if (temp == false && !NewLines)
                 {
                     Console.WriteLine("");
                 }
@@ -268,16 +278,24 @@ static class Program
                 continue;
             }
 
-            if ($"file{i}.phdt" != Dummy.FileName)
+            var __ = count;
+            var _ = i;
+            ValidateTasks.Add(Task.Run(() => CompareTask(__, _, Path.Combine(location, $"file{_}.phdt"))));
+            if(_verbose) Log($"Queued file{_}.phdt to be compared.", "verbose", ConsoleColor.Cyan, ConsoleColor.DarkCyan);
+            else
             {
-                var __ = count;
-                var _ = i;
-                ValidateTasks.Add(Task.Run(() => CompareTask(__, _, Path.Combine(location, $"file{_}.phdt"))));
+                if (temp == false && !NewLines)
+                {
+                    Console.WriteLine("");
+                    temp = true;
+                }
+                Log($"Queued file{_}.phdt to be compared.", "status", ConsoleColor.Magenta, ConsoleColor.DarkMagenta, true);
             }
         }
         
         // wait until every task in ValidateTasks is done
         Task.WaitAll(ValidateTasks.ToArray<Task>());
+        temp = false;
         
         foreach (Task<CompareResult> item in ValidateTasks)
         {
@@ -296,7 +314,7 @@ static class Program
             if(_verbose) Log($"{compareResult.FileName} and {dummy} match, continuing.", "verbose", ConsoleColor.Cyan, ConsoleColor.DarkCyan);
             else
             {
-                if (temp == false && !RawOutput)
+                if (temp == false && !NewLines)
                 {
                     Console.WriteLine("");
                     temp = true;
