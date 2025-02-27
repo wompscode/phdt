@@ -1,4 +1,6 @@
 ﻿using static phdt.Logging;
+using static phdt.FileOperations;
+using static phdt.Structs;
 using System.CommandLine;
 using System.CommandLine.NamingConventionBinder;
 using System.Diagnostics;
@@ -11,35 +13,52 @@ using System.Reflection;
 namespace phdt;
 static class Program
 {
+    private static readonly Stopwatch TotalStopwatch = new ();
+    private static readonly Stopwatch CreateStopwatch = new ();
+    private static readonly Stopwatch CompareStopwatch = new ();
+     
+    private static readonly bool Debug = false;
     private static readonly string? Version = Assembly.GetExecutingAssembly().GetName().Version?.ToString();
+    
     private static bool _verbose;
     public static bool MonochromeOutput;
-    public static bool RawOutput;
-    private static readonly Stopwatch Stopwatch = Stopwatch.StartNew();
-
+    public static bool NewLines;
+    
+    static readonly List<Task<CompareResult>> ValidateTasks = new ();
+    private static int _validateCount;
+    static readonly List<Task<CreateResult>> CreateTasks = new ();
+    private static int _createCount;
     static int Main(string[] args)
     {
         var rootCommand = new RootCommand
         {
             new Option<string>(["--location", "-l"], "Directory to handle all testing in."),
             new Option<int>(["--size", "-s"], "Total size to test in MB."),
-            new Option<int>(["--dummy", "-d"], "Size of dummy file in MB."),
+            new Option<int>(["--dummy", "-d"], "Size of dummy file in MB (max 32mb)."),
             new Option<bool>(["--revalidate", "-rv"], "Re-validate files in directory specified in location (first file becomes dummy)."),
             new Option<bool>(["--verbose", "-v"], "Verbose mode."),
             new Option<bool>(["--monochrome", "-m"], "Disables colour output."),
-            new Option<bool>(["--raw", "-r"], "Raw output.")
+            new Option<bool>(["--newlines", "-n"], "Always output on newline, never overwrite output.")
         };
         
         rootCommand.Description = "Test drive capacity by copying files to a directory on the drive, and validate these files to a dummy file.";
         
-        rootCommand.Handler = CommandHandler.Create<string, int, int, bool, bool, bool, bool>((location, size, dummy, verbose, revalidate, monochrome, raw) =>
+        rootCommand.Handler = CommandHandler.Create<string, int, int, bool, bool, bool, bool>((location, size, dummy, verbose, revalidate, monochrome, newlines) =>
         {
-            Stopwatch.Start();
-            MonochromeOutput = raw || monochrome;
-            RawOutput = raw;
+            TotalStopwatch.Start();
+            MonochromeOutput = monochrome;
+            NewLines = newlines;
             _verbose = verbose;
+            
             Log($"PHoebe's Disk Tester {Version}", "init", ConsoleColor.Blue, ConsoleColor.DarkBlue);
 
+            if (Debug)
+            {
+                location = "test";
+                size = 512;
+                dummy = 4;
+            }
+            
             if (string.IsNullOrEmpty(location))
             {
                 Log($"Directory was not specified.", "fatal", ConsoleColor.Red, ConsoleColor.DarkRed);
@@ -55,7 +74,7 @@ static class Program
             if (dummy == 0)
             {
                 Log($"Dummy file size was not specified, finding value that fits into size specified.", "warning", ConsoleColor.Yellow, ConsoleColor.DarkYellow);
-                for (int i = 2; i < 128; i++)
+                for (int i = 2; i < 32; i++)
                 {
                     if ((size % i) == 0)
                     {
@@ -64,6 +83,12 @@ static class Program
                     }
                 }
                 Log($"Dummy file size set to {dummy}.", "warning", ConsoleColor.Yellow, ConsoleColor.DarkYellow);
+            }
+
+            if (dummy > 32)
+            {
+                Log($"Dummy file size above 32mb, forcing to 32mb.", "warning", ConsoleColor.Yellow, ConsoleColor.DarkYellow);
+                dummy = 32;
             }
             
             string path = location;
@@ -95,7 +120,7 @@ static class Program
                 }
             }
             
-            bool fits = (size % dummy) == 0;
+            bool fits = size % dummy == 0;
             if (fits)
             {
                 if(_verbose) Log($"{dummy} fits into {size} with no remainders. Continuing.", "verbose", ConsoleColor.Cyan, ConsoleColor.DarkCyan);
@@ -110,103 +135,218 @@ static class Program
         return rootCommand.Invoke(args);
     }
 
-    private static void StartTest(string location, int sizeToTest, int dummySize)
+    private static async Task<CreateResult> CreateTask(string location, string file)
     {
-        int count = 0;
+        if (Dummy.Data.Length == 0)
+        {
+            return new CreateResult()
+            {
+                Success = false,
+                File = ""
+            };
+        }
+
+        try
+        {
+            await File.WriteAllBytesAsync(Path.Combine(location, file), Dummy.Data);
+            return new CreateResult()
+            {
+                Success = true,
+                File = file
+            };
+        }
+        catch (Exception exception)
+        {
+            Log($"{exception.Message}", "error", ConsoleColor.Red, ConsoleColor.DarkRed);
+            return new CreateResult()
+            {
+                Success = false,
+                File = ""
+            };
+        }
+    }
+    private static async void StartTest(string location, int sizeToTest, int dummySize)
+    {
         bool temp = false;
+        
         string dummy = "";
+        
+        int count = 0;
         int times = sizeToTest / dummySize;
+        CreateStopwatch.Start();
         for (int i = 0; i < times; i++)
         {
             count += dummySize;
             if(_verbose) Log($"{count} reached.", "verbose", ConsoleColor.Cyan, ConsoleColor.DarkCyan);
-            if (string.IsNullOrEmpty(dummy))
+            if (Dummy.IsSet == false)
             {
                 if(_verbose) Log($"No dummy file, creating: file{i}.phdt.", "verbose", ConsoleColor.Cyan, ConsoleColor.DarkCyan);
-                FileOperations.GenerateDummyFile(Path.Combine(location, $"file{i}.phdt"), dummySize);
+                GenerateDummyFile(Path.Combine(location, $"file{i}.phdt"), dummySize);
                 dummy = $"file{i}.phdt";
+                SetDummyFile(dummy, location);
+                _createCount += dummySize;
                 continue;
             }
-            File.Copy(Path.Combine(location, $"{dummy}"), Path.Combine(location, $"file{i}.phdt"));
-            if(_verbose) Log($"Copying {dummy} to file{i}.phdt.", "verbose", ConsoleColor.Cyan, ConsoleColor.DarkCyan);
+
+            string __ = $"file{i}.phdt";
+            CreateTasks.Add(Task.Run(() => CreateTask(location, __)));
+            if(_verbose) Log($"Queued {__} to be created.", "verbose", ConsoleColor.Cyan, ConsoleColor.DarkCyan);
             else
             {
-                if (temp == false && !RawOutput)
+                if (temp == false && !NewLines)
                 {
                     Console.WriteLine("");
                     temp = true;
                 }
-                Log($"Copying {dummy} to file{i}.phdt.", "status", ConsoleColor.Magenta, ConsoleColor.DarkMagenta, true);
+                Log($"Queued {__} to be created.", "status", ConsoleColor.Magenta, ConsoleColor.DarkMagenta, true);
             }
+        }
+    
+        // wait for all CreateTasks to be done
+        Task.WaitAll(CreateTasks.ToArray<Task>());
+        temp = false;
+        
+        foreach (var item in CreateTasks)
+        {
+            CreateResult result = await item;
+
+            if (result.Success == false) break;
+            if(_verbose) Log($"Created {result.File}.", "verbose", ConsoleColor.Cyan, ConsoleColor.DarkCyan);
+            else
+            {
+                if (temp == false && !NewLines)
+                {
+                    Console.WriteLine("");
+                    temp = true;
+                }
+                Log($"Created {result.File}.", "status", ConsoleColor.Magenta, ConsoleColor.DarkMagenta, true);
+            }
+
+            _createCount += dummySize;
         }
 
         temp = false;
-        if(count == sizeToTest)
+        CreateStopwatch.Stop();
+        if(_createCount == sizeToTest)
         {
-            if(_verbose) Log($"{count} == {sizeToTest}, continuing to validation. (took {ElapsedTime(Stopwatch.Elapsed)})", "verbose", ConsoleColor.Cyan, ConsoleColor.DarkCyan);
+            if(_verbose) Log($"{_createCount} == {sizeToTest}, continuing to validation. (took {ElapsedTime(CreateStopwatch.Elapsed)}, (~)write: {Math.Round(sizeToTest / CreateStopwatch.Elapsed.TotalSeconds)}MB/s)", "verbose", ConsoleColor.Cyan, ConsoleColor.DarkCyan);
             else
             {
-                if (temp == false && !RawOutput)
+                if (temp == false && !NewLines)
                 {
                     Console.WriteLine("");
                 }
-                Log($"{count} matches {sizeToTest}, continuing to validation. (took {ElapsedTime(Stopwatch.Elapsed)})", "status", ConsoleColor.Magenta, ConsoleColor.DarkMagenta, true);
-
+                Log($"{_createCount} matches {sizeToTest}, continuing to validation. (took {ElapsedTime(CreateStopwatch.Elapsed)}, (~)write: {Math.Round(sizeToTest / CreateStopwatch.Elapsed.TotalSeconds)}MB/s)", "status", ConsoleColor.Magenta, ConsoleColor.DarkMagenta, true);
             }
             Validate(location, dummy, dummySize, times, sizeToTest);
         }
         else
         {
-            Log($"{count} and {sizeToTest} do not match, something went wrong..", "fatal", ConsoleColor.Red, ConsoleColor.DarkRed);
+            Log($"{_createCount} and {sizeToTest} do not match, something went wrong..", "fatal", ConsoleColor.Red, ConsoleColor.DarkRed);
         }
     }
 
-    private static void Validate(string location, string dummy, int dummySize, int times, int sizeToTest)
+    private static async Task<CompareResult> CompareTask(int count, int i, string fileTwo)
     {
+        bool outcome = false;
+        try
+        {
+            outcome = await DummyCompare(Dummy, fileTwo);
+        }
+        catch (Exception exc)
+        {
+            Log($"{exc.Message}", "error", ConsoleColor.Red, ConsoleColor.DarkRed);
+        }
+        return new CompareResult { Count = count, HasFailedCompare = outcome, Iteration = i, FileName = fileTwo};
+    }
+
+    private static async void Validate(string location, string dummy, int dummySize, int times, int sizeToTest)
+    {
+        bool temp = false;
+        int count = 0;
+        
         if(_verbose) Log($"Validation reached.", "verbose", ConsoleColor.Cyan, ConsoleColor.DarkCyan);
 
-        int count = 0;
-        bool temp = false;
+        CompareStopwatch.Start();
         for (int i = 0; i < times; i++)
         {
             count += dummySize;
             if(_verbose) Log($"{count} reached.", "verbose", ConsoleColor.Cyan, ConsoleColor.DarkCyan);
-            if ($"file{i}.phdt" == dummy)
+            if(!Dummy.IsSet) SetDummyFile(dummy, location);
+            if ($"file{i}.phdt" == Dummy.FileName)
             {
                 if(_verbose) Log($"File is dummy, continuing.", "verbose", ConsoleColor.Cyan, ConsoleColor.DarkCyan);
+
+                bool inMemory = await DummyCompare(Dummy, Path.Combine(location, dummy));
+                if (inMemory == false)
+                {
+                    Log("Dummy file on disk does not match dummy file stored in memory.", "fatal", ConsoleColor.Red, ConsoleColor.DarkRed);
+                    break;
+                }
+                
+                _validateCount += dummySize;
                 continue;
             }
-            bool outcome = FileOperations.Compare(Path.Combine(location, dummy), Path.Combine(location, $"file{i}.phdt"));
-            if(_verbose) Log($"Comparing file{i}.phdt to {dummy}.", "verbose", ConsoleColor.Cyan, ConsoleColor.DarkCyan);
-            if (outcome == false)
-            {
-                Log($"File file{i}.phdt does not match the dummy file: failed at {count} bytes.", "fatal", ConsoleColor.Red, ConsoleColor.DarkRed);
-                break;
-            }
-            if(_verbose) Log($"file{i}.phdt and {dummy} match, continuing.", "verbose", ConsoleColor.Cyan, ConsoleColor.DarkCyan);
+
+            var __ = count;
+            var _ = i;
+            ValidateTasks.Add(Task.Run(() => CompareTask(__, _, Path.Combine(location, $"file{_}.phdt"))));
+            if(_verbose) Log($"Queued file{_}.phdt to be compared.", "verbose", ConsoleColor.Cyan, ConsoleColor.DarkCyan);
             else
             {
-                if (temp == false && !RawOutput)
+                if (temp == false && !NewLines)
                 {
                     Console.WriteLine("");
                     temp = true;
                 }
-                Log($"file{i}.phdt and {dummy} match, continuing.", "status", ConsoleColor.Magenta, ConsoleColor.DarkMagenta, true);
+                Log($"Queued file{_}.phdt to be compared.", "status", ConsoleColor.Magenta, ConsoleColor.DarkMagenta, true);
             }
         }
-        if (count == sizeToTest)
+        
+        // wait until every task in ValidateTasks is done
+        Task.WaitAll(ValidateTasks.ToArray<Task>());
+        temp = false;
+        
+        foreach (Task<CompareResult> item in ValidateTasks)
         {
-            Log($"{count} megabytes counted, {sizeToTest} megabytes needed. (took {ElapsedTime(Stopwatch.Elapsed)})", "status", ConsoleColor.Magenta, ConsoleColor.DarkMagenta);
+            CompareResult compareResult = await item;
+            if(_verbose) Log($"Comparing file{compareResult.Iteration}.phdt to dummy.", "verbose", ConsoleColor.Cyan, ConsoleColor.DarkCyan);
+
+            bool outcome = compareResult.HasFailedCompare;
+            
+            if (outcome == false)
+            {
+                Log($"File {compareResult.FileName} does not match the dummy file: failed at {compareResult.Count} bytes.", "fatal", ConsoleColor.Red, ConsoleColor.DarkRed);
+                break;
+            }
+            _validateCount += dummySize;
+            
+            if(_verbose) Log($"{compareResult.FileName} and dummy match, continuing.", "verbose", ConsoleColor.Cyan, ConsoleColor.DarkCyan);
+            else
+            {
+                if (temp == false && !NewLines)
+                {
+                    Console.WriteLine("");
+                    temp = true;
+                }
+                Log($"{compareResult.FileName} and dummy match, continuing.", "status", ConsoleColor.Magenta, ConsoleColor.DarkMagenta, true);
+            }
+        }
+
+        CompareStopwatch.Stop();
+        if (_validateCount == sizeToTest)
+        {
+            Log($"{_validateCount} megabytes counted, {sizeToTest} megabytes needed. (took {ElapsedTime(CompareStopwatch.Elapsed)}, (~)read: {Math.Round(sizeToTest / CompareStopwatch.Elapsed.TotalSeconds)}MB/s)", "status", ConsoleColor.Magenta, ConsoleColor.DarkMagenta);
         }
         else
         {
-            Log($"{count} megabytes counted, {sizeToTest} megabytes needed: mismatch?", "fatal", ConsoleColor.Red, ConsoleColor.DarkRed);
+            Log($"{_validateCount} megabytes counted, {sizeToTest} megabytes needed: mismatch?", "fatal", ConsoleColor.Red, ConsoleColor.DarkRed);
         }
 
-        Stopwatch.Stop();
+        TotalStopwatch.Stop();
         
-        Log($"Completed in {ElapsedTime(Stopwatch.Elapsed)}.", "finish", ConsoleColor.Green, ConsoleColor.DarkGreen);
-        Log($"You can clear the files in {location} if you want to, or keep them to re-validate (phdt -l {location} -s {sizeToTest} -d {dummySize} -rv).", "finish", ConsoleColor.Green, ConsoleColor.DarkGreen);
+        Log($"Completed in {ElapsedTime(CompareStopwatch.Elapsed + CreateStopwatch.Elapsed)} (full total: {ElapsedTime(TotalStopwatch.Elapsed)}).", "finish", ConsoleColor.Green, ConsoleColor.DarkGreen);
+        Log($"You can clear the files in \"{location}\" if you want to, or keep them to re-validate (phdt -l {location} -s {sizeToTest} -d {dummySize} -rv).", "finish", ConsoleColor.Green, ConsoleColor.DarkGreen);
     }
 
     private static string ElapsedTime(TimeSpan ts) {
