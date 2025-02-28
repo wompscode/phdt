@@ -1,14 +1,14 @@
-﻿using System.Net.Mime;
-using Pastel;
+﻿using Pastel;
 
+// ReSharper disable AssignmentInsteadOfDiscard
 // ReSharper disable StringLiteralTypo
 // ReSharper disable CommentTypo
 // ReSharper disable IdentifierTypo
-namespace phdt;
 
+namespace phdt;
 public static class Logging
 {
-    public static void Log(string message, string? prefix = null, Structs.ConsoleColourScheme? colourScheme = null)
+    public static void Log(string message, string? prefix = null, Structs.ConsoleColourSet? colourScheme = null)
     {
         if (Program.MonochromeOutput)
         {
