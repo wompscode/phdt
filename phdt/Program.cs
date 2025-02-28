@@ -26,8 +26,10 @@ static class Program
     
     static readonly List<Task<CompareResult>> ValidateTasks = new ();
     private static int _validateCount;
+    private static bool _validateFailed;
     static readonly List<Task<CreateResult>> CreateTasks = new ();
     private static int _createCount;
+
     static int Main(string[] args)
     {
         var rootCommand = new RootCommand
@@ -50,7 +52,7 @@ static class Program
             NewLines = newlines;
             _verbose = verbose;
             
-            Log($"PHoebe's Disk Tester {Version}", "init", ConsoleColor.Blue, ConsoleColor.DarkBlue);
+            Log($"Phoebe's Disk Tester {Version}", "init", ConsoleColor.Blue, ConsoleColor.DarkBlue);
 
             if (Debug)
             {
@@ -189,7 +191,7 @@ static class Program
             }
 
             string __ = $"file{i}.phdt";
-            CreateTasks.Add(Task.Run(() => CreateTask(location, __)));
+            CreateTasks.Add(Task.Run(async () => await CreateTask(location, __)));
             if(_verbose) Log($"Queued {__} to be created.", "verbose", ConsoleColor.Cyan, ConsoleColor.DarkCyan);
             else
             {
@@ -251,7 +253,11 @@ static class Program
         bool outcome = false;
         try
         {
-            outcome = await DummyCompare(Dummy, fileTwo);
+            if (!_validateFailed)
+            {
+                outcome = await DummyCompare(Dummy, fileTwo);
+                if (outcome == false) _validateFailed = true;
+            }
         }
         catch (Exception exc)
         {
@@ -290,7 +296,7 @@ static class Program
 
             var __ = count;
             var _ = i;
-            ValidateTasks.Add(Task.Run(() => CompareTask(__, _, Path.Combine(location, $"file{_}.phdt"))));
+            ValidateTasks.Add(Task.Run(async () => await CompareTask(__, _, Path.Combine(location, $"file{_}.phdt"))));
             if(_verbose) Log($"Queued file{_}.phdt to be compared.", "verbose", ConsoleColor.Cyan, ConsoleColor.DarkCyan);
             else
             {
@@ -316,7 +322,7 @@ static class Program
             
             if (outcome == false)
             {
-                Log($"File {compareResult.FileName} does not match the dummy file: failed at {compareResult.Count} bytes.", "fatal", ConsoleColor.Red, ConsoleColor.DarkRed);
+                Log($"File {compareResult.FileName} does not match the dummy file: failed at {compareResult.Count} megabytes.", "fatal", ConsoleColor.Red, ConsoleColor.DarkRed);
                 break;
             }
             _validateCount += dummySize;
