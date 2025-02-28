@@ -4,6 +4,7 @@ using static phdt.Structs;
 using System.CommandLine;
 using System.CommandLine.NamingConventionBinder;
 using System.Diagnostics;
+using System.Drawing;
 using System.Reflection;
 
 // ReSharper disable StringLiteralTypo
@@ -19,10 +20,9 @@ static class Program
      
     private static readonly bool Debug = false;
     private static readonly string? Version = Assembly.GetExecutingAssembly().GetName().Version?.ToString();
-    
-    private static bool _verbose;
+
+    private static bool Verbose;
     public static bool MonochromeOutput;
-    private static bool NewLines;
 
     private static SemaphoreSlim? _semaphore;
     static readonly List<Task<CompareResult>> ValidateTasks = new ();
@@ -31,6 +31,38 @@ static class Program
     static readonly List<Task<CreateResult>> CreateTasks = new ();
     private static int _createCount;
     private static int _semaphoreCount;
+
+    private static readonly ConsoleColourScheme _init = new()
+    {
+        Prefix = Color.DarkSlateBlue,
+        Message = Color.SlateBlue
+    };
+    private static readonly ConsoleColourScheme _warning = new()
+    {
+        Prefix = Color.DarkOrange,
+        Message = Color.Orange
+    };
+    private static readonly ConsoleColourScheme _status = new()
+    {
+        Prefix = Color.DarkViolet,
+        Message = Color.BlueViolet
+    };
+    private static readonly ConsoleColourScheme _fatal = new()
+    {
+        Prefix = Color.DarkRed,
+        Message = Color.Red
+    };
+    private static readonly ConsoleColourScheme _verbose = new()
+    {
+        Prefix = Color.DarkCyan,
+        Message = Color.Cyan
+    };
+    private static readonly ConsoleColourScheme _finish = new()
+    {
+        Prefix = Color.DarkGreen,
+        Message = Color.Green
+    };
+    
     static int Main(string[] args)
     {
         var rootCommand = new RootCommand
@@ -41,23 +73,21 @@ static class Program
             new Option<bool>(["--revalidate", "-rv"], "Re-validate files in directory specified in location (first file becomes dummy)."),
             new Option<bool>(["--verbose", "-v"], "Verbose mode."),
             new Option<bool>(["--monochrome", "-m"], "Disables colour output."),
-            new Option<bool>(["--newlines", "-n"], "Always output on newline, never overwrite output."),
-            new Option<int>(["--semaphores", "-t"], "Maximum concurrent tasks. (DO NOT SET TOO HIGH)")
+            new Option<int>(["--maxtasks", "-t"], "Maximum concurrent tasks. (DO NOT SET TOO HIGH)")
         };
         
         rootCommand.Description = "Test drive capacity by copying files to a directory on the drive, and validate these files to a dummy file.";
         
-        rootCommand.Handler = CommandHandler.Create<string, int, int, bool, bool, bool, bool, int>((location, size, dummy, verbose, revalidate, monochrome, newlines, semaphores) =>
+        rootCommand.Handler = CommandHandler.Create<string, int, int, bool, bool, bool, int>((location, size, dummy, verbose, revalidate, monochrome, semaphores) =>
         {
             TotalStopwatch.Start();
             MonochromeOutput = monochrome;
-            NewLines = newlines;
-            _verbose = verbose;
-            Log($"Phoebe's Disk Tester {Version}", "init", ConsoleColor.Blue, ConsoleColor.DarkBlue);
+            Verbose = verbose;
+            Log($"Phoebe's Disk Tester {Version}", "init", _init);
 
             if (semaphores == 0)
             {
-                Log($"Semaphore count was not specified, setting to 1. This may be slow.", "warning", ConsoleColor.Yellow, ConsoleColor.DarkYellow);
+                Log($"Semaphore count was not specified, setting to 1. This may be slow.", "warning", _warning);
                 semaphores = 1;
             }
             _semaphore = new SemaphoreSlim(0, semaphores);
@@ -72,19 +102,19 @@ static class Program
             
             if (string.IsNullOrEmpty(location))
             {
-                Log($"Directory was not specified.", "fatal", ConsoleColor.Red, ConsoleColor.DarkRed);
+                Log($"Directory was not specified.", "fatal", _fatal);
                 return;
             }
 
             if (size == 0)
             {
-                Log($"Size to test was not specified.", "fatal", ConsoleColor.Red, ConsoleColor.DarkRed);
+                Log($"Size to test was not specified.", "fatal", _fatal);
                 return;
             }
 
             if (dummy == 0)
             {
-                Log($"Dummy file size was not specified, finding value that fits into size specified.", "warning", ConsoleColor.Yellow, ConsoleColor.DarkYellow);
+                Log($"Dummy file size was not specified, finding value that fits into size specified.", "warning", _warning);
                 for (int i = 2; i < 32; i++)
                 {
                     if ((size % i) == 0)
@@ -93,19 +123,19 @@ static class Program
                         break;
                     }
                 }
-                Log($"Dummy file size set to {dummy}.", "warning", ConsoleColor.Yellow, ConsoleColor.DarkYellow);
+                Log($"Dummy file size set to {dummy}.", "warning", _warning);
             }
 
             if (dummy > 32)
             {
-                Log($"Dummy file size above 32mb, forcing to 32mb.", "warning", ConsoleColor.Yellow, ConsoleColor.DarkYellow);
+                Log($"Dummy file size above 32mb, forcing to 32mb.", "warning", _warning);
                 dummy = 32;
             }
             
             string path = location;
             if (!Directory.Exists(path))
             {
-                Log($"Directory does not exist.", "fatal", ConsoleColor.Red, ConsoleColor.DarkRed);
+                Log($"Directory does not exist.", "fatal", _fatal);
                 return;
             }
  
@@ -115,18 +145,18 @@ static class Program
                 {
                     if(File.Exists(Path.Combine(path, "file0.phdt")))
                     {
-                        Log($"Revalidation started.", "revalidation", ConsoleColor.Green, ConsoleColor.DarkGreen);
+                        Log($"Revalidation started.", "revalidation", _status);
                         Validate(path, "file0.phdt", dummy, size / dummy, size);
                         return;
                     } else
                     {
-                        Log($"Directory is missing file0.phdt.", "fatal", ConsoleColor.Red, ConsoleColor.DarkRed);
+                        Log($"Directory is missing file0.phdt.", "fatal", _fatal);
                         return;
                     }
                 }
                 else
                 {
-                    Log($"Directory is not empty.", "fatal", ConsoleColor.Red, ConsoleColor.DarkRed);
+                    Log($"Directory is not empty.", "fatal", _fatal);
                     return;
                 }
             }
@@ -134,12 +164,12 @@ static class Program
             bool fits = size % dummy == 0;
             if (fits)
             {
-                if(_verbose) Log($"{dummy} fits into {size} with no remainders. Continuing.", "verbose", ConsoleColor.Cyan, ConsoleColor.DarkCyan);
+                if(Verbose) Log($"{dummy} fits into {size} with no remainders. Continuing.", "verbose", _verbose);
                 StartTest(location, size, dummy);
             }
             else
             {
-                Log($"Dummy file size does not fit into size to test with no remainder.", "fatal", ConsoleColor.Red, ConsoleColor.DarkRed);
+                Log($"Dummy file size does not fit into size to test with no remainder.", "fatal", _fatal);
             }
         });
 
@@ -150,7 +180,12 @@ static class Program
     {
         try
         {
-            await _semaphore?.WaitAsync();
+            if(_semaphore == null) return new CreateResult()
+            {
+                Success = true,
+                File = file
+            };
+            await _semaphore.WaitAsync();
             if (Dummy.Data.Length == 0)
             {
                 return new CreateResult()
@@ -171,7 +206,7 @@ static class Program
             }
             catch (Exception exception)
             {
-                Log($"{exception.Message}", "error", ConsoleColor.Red, ConsoleColor.DarkRed);
+                Log($"{exception.Message}", "fatal", _fatal);
                 return new CreateResult()
                 {
                     Success = false,
@@ -194,10 +229,10 @@ static class Program
         for (int i = 0; i < times; i++)
         {
             count += dummySize;
-            if(_verbose) Log($"{count} reached.", "verbose", ConsoleColor.Cyan, ConsoleColor.DarkCyan);
+            if(Verbose) Log($"{count} reached.", "verbose", _verbose);
             if (Dummy.IsSet == false)
             {
-                if(_verbose) Log($"No dummy file, creating: file{i}.phdt.", "verbose", ConsoleColor.Cyan, ConsoleColor.DarkCyan);
+                if(Verbose) Log($"No dummy file, creating: file{i}.phdt.", "verbose", _verbose);
                 GenerateDummyFile(Path.Combine(location, $"file{i}.phdt"), dummySize);
                 dummy = $"file{i}.phdt";
                 SetDummyFile(dummy, location);
@@ -207,10 +242,10 @@ static class Program
 
             string __ = $"file{i}.phdt";
             CreateTasks.Add(Task.Run(async () => await CreateTask(location, __)));
-            if(_verbose) Log($"Queued {__} to be created.", "verbose", ConsoleColor.Cyan, ConsoleColor.DarkCyan);
+            if(Verbose) Log($"Queued {__} to be created.", "verbose", _verbose);
             else
             {
-                Log($"Queued {__} to be created.", "status", ConsoleColor.Magenta, ConsoleColor.DarkMagenta, true);
+                Log($"Queued {__} to be created.", "status", _status);
             }
         }
 
@@ -223,10 +258,10 @@ static class Program
             CreateResult result = await item;
 
             if (result.Success == false) break;
-            if(_verbose) Log($"Created {result.File}.", "verbose", ConsoleColor.Cyan, ConsoleColor.DarkCyan);
+            if(Verbose) Log($"Created {result.File}.", "verbose", _verbose);
             else
             {
-                Log($"Created {result.File}.", "status", ConsoleColor.Magenta, ConsoleColor.DarkMagenta, true);
+                Log($"Created {result.File}.", "status", _status);
             }
 
             _createCount += dummySize;
@@ -235,16 +270,16 @@ static class Program
         CreateStopwatch.Stop();
         if(_createCount == sizeToTest)
         {
-            if(_verbose) Log($"{_createCount} == {sizeToTest}, continuing to validation. (took {ElapsedTime(CreateStopwatch.Elapsed)}, (~)write: {Math.Round(sizeToTest / CreateStopwatch.Elapsed.TotalSeconds)}MB/s)", "verbose", ConsoleColor.Cyan, ConsoleColor.DarkCyan);
+            if(Verbose) Log($"{_createCount} == {sizeToTest}, continuing to validation. (took {ElapsedTime(CreateStopwatch.Elapsed)}, (~)write: {Math.Round(sizeToTest / CreateStopwatch.Elapsed.TotalSeconds)}MB/s)", "verbose", _verbose);
             else
             {
-                Log($"{_createCount} matches {sizeToTest}, continuing to validation. (took {ElapsedTime(CreateStopwatch.Elapsed)}, (~)write: {Math.Round(sizeToTest / CreateStopwatch.Elapsed.TotalSeconds)}MB/s)", "status", ConsoleColor.Magenta, ConsoleColor.DarkMagenta, true);
+                Log($"{_createCount} matches {sizeToTest}, continuing to validation. (took {ElapsedTime(CreateStopwatch.Elapsed)}, (~)write: {Math.Round(sizeToTest / CreateStopwatch.Elapsed.TotalSeconds)}MB/s)", "status", _status);
             }
             Validate(location, dummy, dummySize, times, sizeToTest);
         }
         else
         {
-            Log($"{_createCount} and {sizeToTest} do not match, something went wrong..", "fatal", ConsoleColor.Red, ConsoleColor.DarkRed);
+            Log($"{_createCount} and {sizeToTest} do not match, something went wrong..", "fatal", _fatal);
         }
     }
 
@@ -252,7 +287,11 @@ static class Program
     {
         try
         {
-            await _semaphore?.WaitAsync();
+            if(_semaphore == null) return new CompareResult()
+            {
+                Count = count, HasFailedCompare = false, Iteration = i, FileName = fileTwo
+            };
+            await _semaphore.WaitAsync();
             bool outcome = false;
             try
             {
@@ -264,7 +303,7 @@ static class Program
             }
             catch (Exception exc)
             {
-                Log($"{exc.Message}", "error", ConsoleColor.Red, ConsoleColor.DarkRed);
+                Log($"{exc.Message}", "fatal", _fatal);
             }
             return new CompareResult { Count = count, HasFailedCompare = outcome, Iteration = i, FileName = fileTwo};
         }
@@ -279,22 +318,22 @@ static class Program
         _semaphore = new SemaphoreSlim(0, _semaphoreCount);
         int count = 0;
         
-        if(_verbose) Log($"Validation reached.", "verbose", ConsoleColor.Cyan, ConsoleColor.DarkCyan);
+        if(Verbose) Log($"Validation reached.", "verbose", _verbose);
 
         CompareStopwatch.Start();
         for (int i = 0; i < times; i++)
         {
             count += dummySize;
-            if(_verbose) Log($"{count} reached.", "verbose", ConsoleColor.Cyan, ConsoleColor.DarkCyan);
+            if(Verbose) Log($"{count} reached.", "verbose", _verbose);
             if(!Dummy.IsSet) SetDummyFile(dummy, location);
             if ($"file{i}.phdt" == Dummy.FileName)
             {
-                if(_verbose) Log($"File is dummy, continuing.", "verbose", ConsoleColor.Cyan, ConsoleColor.DarkCyan);
+                if(Verbose) Log($"File is dummy, continuing.", "verbose", _verbose);
 
                 bool inMemory = await DummyCompare(Dummy, Path.Combine(location, dummy));
                 if (inMemory == false)
                 {
-                    Log("Dummy file on disk does not match dummy file stored in memory.", "fatal", ConsoleColor.Red, ConsoleColor.DarkRed);
+                    Log("Dummy file on disk does not match dummy file stored in memory.", "fatal", _fatal);
                     break;
                 }
                 
@@ -305,52 +344,52 @@ static class Program
             var __ = count;
             var _ = i;
             ValidateTasks.Add(Task.Run(async () => await CompareTask(__, _, Path.Combine(location, $"file{_}.phdt"))));
-            if(_verbose) Log($"Queued file{_}.phdt to be compared.", "verbose", ConsoleColor.Cyan, ConsoleColor.DarkCyan);
+            if(Verbose) Log($"Queued file{_}.phdt to be compared.", "verbose", _verbose);
             else
             {
-                Log($"Queued file{_}.phdt to be compared.", "status", ConsoleColor.Magenta, ConsoleColor.DarkMagenta, true);
+                Log($"Queued file{_}.phdt to be compared.", "status", _status);
             }
         }
 
-        _semaphore?.Release(_semaphoreCount);
+        _semaphore.Release(_semaphoreCount);
         // wait until every task in ValidateTasks is done
         Task.WaitAll(ValidateTasks.ToArray<Task>());
         
         foreach (Task<CompareResult> item in ValidateTasks)
         {
             CompareResult compareResult = await item;
-            if(_verbose) Log($"Comparing file{compareResult.Iteration}.phdt to dummy.", "verbose", ConsoleColor.Cyan, ConsoleColor.DarkCyan);
+            if(Verbose) Log($"Comparing file{compareResult.Iteration}.phdt to dummy.", "verbose", _verbose);
 
             bool outcome = compareResult.HasFailedCompare;
             
             if (outcome == false)
             {
-                Log($"File {compareResult.FileName} does not match the dummy file: failed at {compareResult.Count} megabytes.", "fatal", ConsoleColor.Red, ConsoleColor.DarkRed);
+                Log($"File {compareResult.FileName} does not match the dummy file: failed at {compareResult.Count} megabytes.", "fatal", _fatal);
                 break;
             }
             _validateCount += dummySize;
             
-            if(_verbose) Log($"{compareResult.FileName} and dummy match, continuing.", "verbose", ConsoleColor.Cyan, ConsoleColor.DarkCyan);
+            if(Verbose) Log($"{compareResult.FileName} and dummy match, continuing.", "verbose", _verbose);
             else
             {
-                Log($"{compareResult.FileName} and dummy match, continuing.", "status", ConsoleColor.Magenta, ConsoleColor.DarkMagenta, true);
+                Log($"{compareResult.FileName} and dummy match, continuing.", "status", _status);
             }
         }
 
         CompareStopwatch.Stop();
         if (_validateCount == sizeToTest)
         {
-            Log($"{_validateCount} megabytes counted, {sizeToTest} megabytes needed. (took {ElapsedTime(CompareStopwatch.Elapsed)}, (~)read: {Math.Round(sizeToTest / CompareStopwatch.Elapsed.TotalSeconds)}MB/s)", "status", ConsoleColor.Magenta, ConsoleColor.DarkMagenta);
+            Log($"{_validateCount} megabytes counted, {sizeToTest} megabytes needed. (took {ElapsedTime(CompareStopwatch.Elapsed)}, (~)read: {Math.Round(sizeToTest / CompareStopwatch.Elapsed.TotalSeconds)}MB/s)", "status", _status);
         }
         else
         {
-            Log($"{_validateCount} megabytes counted, {sizeToTest} megabytes needed: mismatch?", "fatal", ConsoleColor.Red, ConsoleColor.DarkRed);
+            Log($"{_validateCount} megabytes counted, {sizeToTest} megabytes needed: mismatch?", "fatal", _fatal);
         }
 
         TotalStopwatch.Stop();
         
-        Log($"Completed in {ElapsedTime(CompareStopwatch.Elapsed + CreateStopwatch.Elapsed)} (full total: {ElapsedTime(TotalStopwatch.Elapsed)}).", "finish", ConsoleColor.Green, ConsoleColor.DarkGreen);
-        Log($"You can clear the files in \"{location}\" if you want to, or keep them to re-validate (phdt -l {location} -s {sizeToTest} -d {dummySize} -rv).", "finish", ConsoleColor.Green, ConsoleColor.DarkGreen);
+        Log($"Completed in {ElapsedTime(CompareStopwatch.Elapsed + CreateStopwatch.Elapsed)} (full total: {ElapsedTime(TotalStopwatch.Elapsed)}).", "finish", _finish);
+        Log($"You can clear the files in \"{location}\" if you want to, or keep them to re-validate (phdt -l {location} -s {sizeToTest} -d {dummySize} -rv).", "finish", _finish);
     }
 
     private static string ElapsedTime(TimeSpan ts) {
