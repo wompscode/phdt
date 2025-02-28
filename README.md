@@ -1,5 +1,6 @@
 ﻿# phdt
 **PH**oebe's **D**isk **T**ester  
+*heads up*: On large volumes, it will use a lot of CPU because lots of Tasks are created. I should probably limit how many tasks run at once.
   
 You should probably just use [h2testw](https://h2testw.org/). I just got bored and wanted to make something, and I got an SSD from CeX, so I had an excuse to make this. This does not tell you read/write speed, and only will tell you if your drive corrupts stuff at a certain point.  
   
