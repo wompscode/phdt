@@ -46,16 +46,25 @@ public static class FileOperations
 
         var f1Stream = new FileStream(fileOne, FileMode.Open);
         byte[] f1Bytes = new byte[f1Stream.Length];
-        
-        if(f1Stream.Length != dummy.Length)
+        var _ = f1Stream.Read(f1Bytes, 0, f1Bytes.Length);
+
+        if(f1Stream.Length != dummy.Data.Length)
         {
             f1Stream.Close();
             return Task.FromResult(false);
         }
 
-        var _ = f1Stream.Read(f1Bytes, 0, f1Bytes.Length);
-        bool ot = dummy.Data.SequenceEqual(f1Bytes);
+        bool ot = true;
+        for (int i = 0; i < dummy.Data.Length; i++)
+        {
+            if (dummy.Data[i] != f1Bytes[i])
+            {
+                ot = false;
+                break;
+            }
+        }
         
+        f1Stream.Close();
         return Task.FromResult(ot);
     }
     

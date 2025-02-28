@@ -1,7 +1,14 @@
-﻿namespace phdt;
+﻿using System.Drawing;
+
+namespace phdt;
 
 public static class Structs
 {
+    public struct ConsoleColourScheme
+    {
+        public Color Prefix { get; init; }
+        public Color Message { get; init; }
+    }
     public struct CompareResult
     {
         public bool HasFailedCompare { get; init; }
