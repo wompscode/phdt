@@ -9,7 +9,6 @@ public static class Logging
 {
     public static void Log(string message, string? prefix = null, ConsoleColor? prefixColour = null, ConsoleColor? messageColour = null, bool samePosition = false)
     {
-        if(samePosition && !Program.NewLines) Console.SetCursorPosition(0, Console.CursorTop - 1);
         if (Program.MonochromeOutput)
         {
             prefixColour = null;
@@ -37,7 +36,6 @@ public static class Logging
 
     public static void Log(string message, (string text, ConsoleColor colour)[] colours, string? prefix = null, ConsoleColor? prefixColour = null, ConsoleColor? messageColour = null, bool samePosition = false)
     {
-        if(samePosition && !Program.NewLines) Console.SetCursorPosition(0, Console.CursorTop - 1); 
         if (Program.MonochromeOutput)
         {
             prefixColour = null;

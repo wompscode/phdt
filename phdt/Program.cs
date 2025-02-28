@@ -22,14 +22,15 @@ static class Program
     
     private static bool _verbose;
     public static bool MonochromeOutput;
-    public static bool NewLines;
-    
+    private static bool NewLines;
+
+    private static SemaphoreSlim? _semaphore;
     static readonly List<Task<CompareResult>> ValidateTasks = new ();
     private static int _validateCount;
     private static bool _validateFailed;
     static readonly List<Task<CreateResult>> CreateTasks = new ();
     private static int _createCount;
-
+    private static int _semaphoreCount;
     static int Main(string[] args)
     {
         var rootCommand = new RootCommand
@@ -40,19 +41,27 @@ static class Program
             new Option<bool>(["--revalidate", "-rv"], "Re-validate files in directory specified in location (first file becomes dummy)."),
             new Option<bool>(["--verbose", "-v"], "Verbose mode."),
             new Option<bool>(["--monochrome", "-m"], "Disables colour output."),
-            new Option<bool>(["--newlines", "-n"], "Always output on newline, never overwrite output.")
+            new Option<bool>(["--newlines", "-n"], "Always output on newline, never overwrite output."),
+            new Option<int>(["--semaphores", "-t"], "Maximum concurrent tasks. (DO NOT SET TOO HIGH)")
         };
         
         rootCommand.Description = "Test drive capacity by copying files to a directory on the drive, and validate these files to a dummy file.";
         
-        rootCommand.Handler = CommandHandler.Create<string, int, int, bool, bool, bool, bool>((location, size, dummy, verbose, revalidate, monochrome, newlines) =>
+        rootCommand.Handler = CommandHandler.Create<string, int, int, bool, bool, bool, bool, int>((location, size, dummy, verbose, revalidate, monochrome, newlines, semaphores) =>
         {
             TotalStopwatch.Start();
             MonochromeOutput = monochrome;
             NewLines = newlines;
             _verbose = verbose;
-            
             Log($"Phoebe's Disk Tester {Version}", "init", ConsoleColor.Blue, ConsoleColor.DarkBlue);
+
+            if (semaphores == 0)
+            {
+                Log($"Semaphore count was not specified, setting to 1. This may be slow.", "warning", ConsoleColor.Yellow, ConsoleColor.DarkYellow);
+                semaphores = 1;
+            }
+            _semaphore = new SemaphoreSlim(0, semaphores);
+            _semaphoreCount = semaphores;
 
             if (Debug)
             {
@@ -139,38 +148,44 @@ static class Program
 
     private static async Task<CreateResult> CreateTask(string location, string file)
     {
-        if (Dummy.Data.Length == 0)
-        {
-            return new CreateResult()
-            {
-                Success = false,
-                File = ""
-            };
-        }
-
         try
         {
-            await File.WriteAllBytesAsync(Path.Combine(location, file), Dummy.Data);
-            return new CreateResult()
+            await _semaphore?.WaitAsync();
+            if (Dummy.Data.Length == 0)
             {
-                Success = true,
-                File = file
-            };
+                return new CreateResult()
+                {
+                    Success = false,
+                    File = ""
+                };
+            }
+
+            try
+            {
+                await File.WriteAllBytesAsync(Path.Combine(location, file), Dummy.Data);
+                return new CreateResult()
+                {
+                    Success = true,
+                    File = file
+                };
+            }
+            catch (Exception exception)
+            {
+                Log($"{exception.Message}", "error", ConsoleColor.Red, ConsoleColor.DarkRed);
+                return new CreateResult()
+                {
+                    Success = false,
+                    File = ""
+                };
+            }
         }
-        catch (Exception exception)
+        finally
         {
-            Log($"{exception.Message}", "error", ConsoleColor.Red, ConsoleColor.DarkRed);
-            return new CreateResult()
-            {
-                Success = false,
-                File = ""
-            };
+            _semaphore?.Release();
         }
     }
     private static async void StartTest(string location, int sizeToTest, int dummySize)
     {
-        bool temp = false;
-        
         string dummy = "";
         
         int count = 0;
@@ -195,18 +210,13 @@ static class Program
             if(_verbose) Log($"Queued {__} to be created.", "verbose", ConsoleColor.Cyan, ConsoleColor.DarkCyan);
             else
             {
-                if (temp == false && !NewLines)
-                {
-                    Console.WriteLine("");
-                    temp = true;
-                }
                 Log($"Queued {__} to be created.", "status", ConsoleColor.Magenta, ConsoleColor.DarkMagenta, true);
             }
         }
-    
+
+        _semaphore?.Release(_semaphoreCount);
         // wait for all CreateTasks to be done
         Task.WaitAll(CreateTasks.ToArray<Task>());
-        temp = false;
         
         foreach (var item in CreateTasks)
         {
@@ -216,28 +226,18 @@ static class Program
             if(_verbose) Log($"Created {result.File}.", "verbose", ConsoleColor.Cyan, ConsoleColor.DarkCyan);
             else
             {
-                if (temp == false && !NewLines)
-                {
-                    Console.WriteLine("");
-                    temp = true;
-                }
                 Log($"Created {result.File}.", "status", ConsoleColor.Magenta, ConsoleColor.DarkMagenta, true);
             }
 
             _createCount += dummySize;
         }
 
-        temp = false;
         CreateStopwatch.Stop();
         if(_createCount == sizeToTest)
         {
             if(_verbose) Log($"{_createCount} == {sizeToTest}, continuing to validation. (took {ElapsedTime(CreateStopwatch.Elapsed)}, (~)write: {Math.Round(sizeToTest / CreateStopwatch.Elapsed.TotalSeconds)}MB/s)", "verbose", ConsoleColor.Cyan, ConsoleColor.DarkCyan);
             else
             {
-                if (temp == false && !NewLines)
-                {
-                    Console.WriteLine("");
-                }
                 Log($"{_createCount} matches {sizeToTest}, continuing to validation. (took {ElapsedTime(CreateStopwatch.Elapsed)}, (~)write: {Math.Round(sizeToTest / CreateStopwatch.Elapsed.TotalSeconds)}MB/s)", "status", ConsoleColor.Magenta, ConsoleColor.DarkMagenta, true);
             }
             Validate(location, dummy, dummySize, times, sizeToTest);
@@ -250,25 +250,33 @@ static class Program
 
     private static async Task<CompareResult> CompareTask(int count, int i, string fileTwo)
     {
-        bool outcome = false;
         try
         {
-            if (!_validateFailed)
+            await _semaphore?.WaitAsync();
+            bool outcome = false;
+            try
             {
-                outcome = await DummyCompare(Dummy, fileTwo);
-                if (outcome == false) _validateFailed = true;
+                if (!_validateFailed)
+                {
+                    outcome = await DummyCompare(Dummy, fileTwo);
+                    if (outcome == false) _validateFailed = true;
+                }
             }
+            catch (Exception exc)
+            {
+                Log($"{exc.Message}", "error", ConsoleColor.Red, ConsoleColor.DarkRed);
+            }
+            return new CompareResult { Count = count, HasFailedCompare = outcome, Iteration = i, FileName = fileTwo};
         }
-        catch (Exception exc)
+        finally
         {
-            Log($"{exc.Message}", "error", ConsoleColor.Red, ConsoleColor.DarkRed);
+            _semaphore?.Release();
         }
-        return new CompareResult { Count = count, HasFailedCompare = outcome, Iteration = i, FileName = fileTwo};
     }
 
     private static async void Validate(string location, string dummy, int dummySize, int times, int sizeToTest)
     {
-        bool temp = false;
+        _semaphore = new SemaphoreSlim(0, _semaphoreCount);
         int count = 0;
         
         if(_verbose) Log($"Validation reached.", "verbose", ConsoleColor.Cyan, ConsoleColor.DarkCyan);
@@ -300,18 +308,13 @@ static class Program
             if(_verbose) Log($"Queued file{_}.phdt to be compared.", "verbose", ConsoleColor.Cyan, ConsoleColor.DarkCyan);
             else
             {
-                if (temp == false && !NewLines)
-                {
-                    Console.WriteLine("");
-                    temp = true;
-                }
                 Log($"Queued file{_}.phdt to be compared.", "status", ConsoleColor.Magenta, ConsoleColor.DarkMagenta, true);
             }
         }
-        
+
+        _semaphore?.Release(_semaphoreCount);
         // wait until every task in ValidateTasks is done
         Task.WaitAll(ValidateTasks.ToArray<Task>());
-        temp = false;
         
         foreach (Task<CompareResult> item in ValidateTasks)
         {
@@ -330,11 +333,6 @@ static class Program
             if(_verbose) Log($"{compareResult.FileName} and dummy match, continuing.", "verbose", ConsoleColor.Cyan, ConsoleColor.DarkCyan);
             else
             {
-                if (temp == false && !NewLines)
-                {
-                    Console.WriteLine("");
-                    temp = true;
-                }
                 Log($"{compareResult.FileName} and dummy match, continuing.", "status", ConsoleColor.Magenta, ConsoleColor.DarkMagenta, true);
             }
         }
