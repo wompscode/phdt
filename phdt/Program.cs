@@ -78,20 +78,20 @@ static class Program
         
         rootCommand.Description = "Test drive capacity by copying files to a directory on the drive, and validate these files to a dummy file.";
         
-        rootCommand.Handler = CommandHandler.Create<string, int, int, bool, bool, bool, int>((location, size, dummy, verbose, revalidate, monochrome, semaphores) =>
+        rootCommand.Handler = CommandHandler.Create<string, int, int, bool, bool, bool, int>((location, size, dummy, verbose, revalidate, monochrome, maxtasks) =>
         {
             TotalStopwatch.Start();
-            MonochromeOutput = monochrome;
             Verbose = verbose;
+            MonochromeOutput = monochrome;
             Log($"Phoebe's Disk Tester {Version}", "init", _init);
 
-            if (semaphores == 0)
+            if (maxtasks == 0)
             {
                 Log($"Semaphore count was not specified, setting to 1. This may be slow.", "warning", _warning);
-                semaphores = 1;
+                maxtasks = 1;
             }
-            _semaphore = new SemaphoreSlim(0, semaphores);
-            _semaphoreCount = semaphores;
+            _semaphore = new SemaphoreSlim(0, maxtasks);
+            _semaphoreCount = maxtasks;
 
             if (Debug)
             {
@@ -114,22 +114,14 @@ static class Program
 
             if (dummy == 0)
             {
-                Log($"Dummy file size was not specified, finding value that fits into size specified.", "warning", _warning);
-                for (int i = 2; i < 32; i++)
-                {
-                    if ((size % i) == 0)
-                    {
-                        dummy = i;
-                        break;
-                    }
-                }
-                Log($"Dummy file size set to {dummy}.", "warning", _warning);
+                dummy = 1;
+                Log($"Dummy file size not specified, set to 1. This will be dramatically slower at larger speeds. Consider setting a value (eg. 16, 32).", "warning", _warning);
             }
 
-            if (dummy > 32)
+            if (dummy > 64)
             {
-                Log($"Dummy file size above 32mb, forcing to 32mb.", "warning", _warning);
-                dummy = 32;
+                Log($"Dummy file size above 64mb, forcing to 64mb.", "warning", _warning);
+                dummy = 64;
             }
             
             string path = location;
@@ -139,6 +131,8 @@ static class Program
                 return;
             }
  
+            if(Verbose) Log($"location: {path}, dummy: {dummy}, size: {size}, verbose: {verbose}, revalidate: {revalidate}, maxtasks: {maxtasks}", "verbose", _verbose);
+            
             if (Directory.GetFileSystemEntries(path).Length > 0)
             {
                 if (revalidate)
@@ -169,14 +163,15 @@ static class Program
             }
             else
             {
-                Log($"Dummy file size does not fit into size to test with no remainder.", "fatal", _fatal);
+                Log($"Dummy file size does not fit into size to test with no remainder, setting dummy size to 2.", "warning", _warning);
+                StartTest(location, size, 2);
             }
         });
 
         return rootCommand.Invoke(args);
     }
 
-    private static async Task<CreateResult> CreateTask(string location, string file)
+    private static async Task<CreateResult> CreateTask(string location, string file, int count, int times)
     {
         try
         {
@@ -197,6 +192,7 @@ static class Program
 
             try
             {
+                Log($"Created {file} ({count}/{times}).", "status", _status);
                 await File.WriteAllBytesAsync(Path.Combine(location, file), Dummy.Data);
                 return new CreateResult()
                 {
@@ -217,6 +213,7 @@ static class Program
         finally
         {
             _semaphore?.Release();
+            if(Verbose) Log($"file creation task {count} released from Semaphore.", "verbose", _verbose);
         }
     }
     private static async void StartTest(string location, int sizeToTest, int dummySize)
@@ -225,11 +222,13 @@ static class Program
         
         int count = 0;
         int times = sizeToTest / dummySize;
+        
         CreateStopwatch.Start();
+        
         for (int i = 0; i < times; i++)
         {
             count += dummySize;
-            if(Verbose) Log($"{count} reached.", "verbose", _verbose);
+            if(Verbose) Log($"Incrementing count by {dummySize}, now {count}.", "verbose", _verbose);
             if (Dummy.IsSet == false)
             {
                 if(Verbose) Log($"No dummy file, creating: file{i}.phdt.", "verbose", _verbose);
@@ -241,12 +240,9 @@ static class Program
             }
 
             string __ = $"file{i}.phdt";
-            CreateTasks.Add(Task.Run(async () => await CreateTask(location, __)));
+            int _i = i;
+            CreateTasks.Add(Task.Run(async () => await CreateTask(location, __, _i, times)));
             if(Verbose) Log($"Queued {__} to be created.", "verbose", _verbose);
-            else
-            {
-                Log($"Queued {__} to be created.", "status", _status);
-            }
         }
 
         _semaphore?.Release(_semaphoreCount);
@@ -258,11 +254,6 @@ static class Program
             CreateResult result = await item;
 
             if (result.Success == false) break;
-            if(Verbose) Log($"Created {result.File}.", "verbose", _verbose);
-            else
-            {
-                Log($"Created {result.File}.", "status", _status);
-            }
 
             _createCount += dummySize;
         }
@@ -270,11 +261,7 @@ static class Program
         CreateStopwatch.Stop();
         if(_createCount == sizeToTest)
         {
-            if(Verbose) Log($"{_createCount} == {sizeToTest}, continuing to validation. (took {ElapsedTime(CreateStopwatch.Elapsed)}, (~)write: {Math.Round(sizeToTest / CreateStopwatch.Elapsed.TotalSeconds)}MB/s)", "verbose", _verbose);
-            else
-            {
-                Log($"{_createCount} matches {sizeToTest}, continuing to validation. (took {ElapsedTime(CreateStopwatch.Elapsed)}, (~)write: {Math.Round(sizeToTest / CreateStopwatch.Elapsed.TotalSeconds)}MB/s)", "status", _status);
-            }
+            Log($"{_createCount} matches {sizeToTest}, continuing to validation. (took {ElapsedTime(CreateStopwatch.Elapsed)}: (~)write: {Math.Round(sizeToTest / CreateStopwatch.Elapsed.TotalSeconds)}MB/s)", "status", _status);
             Validate(location, dummy, dummySize, times, sizeToTest);
         }
         else
@@ -287,18 +274,29 @@ static class Program
     {
         try
         {
-            if(_semaphore == null) return new CompareResult()
-            {
-                Count = count, HasFailedCompare = false, Iteration = i, FileName = fileTwo
-            };
+            if (_semaphore == null)
+                return new CompareResult()
+                {
+                    Count = count, HasFailedCompare = false, Iteration = i, FileName = fileTwo
+                };
             await _semaphore.WaitAsync();
             bool outcome = false;
             try
             {
+                Log($"Validating {fileTwo} against dummy in memory..", "status", _status);
                 if (!_validateFailed)
                 {
                     outcome = await DummyCompare(Dummy, fileTwo);
-                    if (outcome == false) _validateFailed = true;
+                    if (outcome == false)
+                    {
+                        _validateFailed = true;
+                        Log($"File {fileTwo} does not match the dummy in memory: failed at {count} megabytes.", "fatal", _fatal);
+                    }
+                    else
+                    {
+                        Log($"File {fileTwo} matched the dummy in memory, continuing..", "status", _status);
+
+                    }
                 }
             }
             catch (Exception exc)
@@ -310,6 +308,7 @@ static class Program
         finally
         {
             _semaphore?.Release();
+            if(Verbose) Log($"compare task {count} released from Semaphore.", "verbose", _verbose);
         }
     }
 
@@ -324,7 +323,7 @@ static class Program
         for (int i = 0; i < times; i++)
         {
             count += dummySize;
-            if(Verbose) Log($"{count} reached.", "verbose", _verbose);
+            if(Verbose) Log($"Incremented count by {dummySize}, now {count}.", "verbose", _verbose);
             if(!Dummy.IsSet) SetDummyFile(dummy, location);
             if ($"file{i}.phdt" == Dummy.FileName)
             {
@@ -345,10 +344,6 @@ static class Program
             var _ = i;
             ValidateTasks.Add(Task.Run(async () => await CompareTask(__, _, Path.Combine(location, $"file{_}.phdt"))));
             if(Verbose) Log($"Queued file{_}.phdt to be compared.", "verbose", _verbose);
-            else
-            {
-                Log($"Queued file{_}.phdt to be compared.", "status", _status);
-            }
         }
 
         _semaphore.Release(_semaphoreCount);
@@ -358,22 +353,15 @@ static class Program
         foreach (Task<CompareResult> item in ValidateTasks)
         {
             CompareResult compareResult = await item;
-            if(Verbose) Log($"Comparing file{compareResult.Iteration}.phdt to dummy.", "verbose", _verbose);
-
             bool outcome = compareResult.HasFailedCompare;
             
             if (outcome == false)
             {
-                Log($"File {compareResult.FileName} does not match the dummy file: failed at {compareResult.Count} megabytes.", "fatal", _fatal);
                 break;
             }
             _validateCount += dummySize;
             
-            if(Verbose) Log($"{compareResult.FileName} and dummy match, continuing.", "verbose", _verbose);
-            else
-            {
-                Log($"{compareResult.FileName} and dummy match, continuing.", "status", _status);
-            }
+            if(Verbose) Log($"Incrementing _validateCount by {dummySize}, now {_validateCount}.", "verbose", _verbose);
         }
 
         CompareStopwatch.Stop();
